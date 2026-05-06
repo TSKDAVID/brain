@@ -34,7 +34,7 @@ export type GatewaySimResponse = {
   used_sources: string[];
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8010";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "https://brain-vd2l.onrender.com";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const extra = init?.headers;
