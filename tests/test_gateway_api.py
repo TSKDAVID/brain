@@ -90,6 +90,8 @@ def test_handshake_happy_path(monkeypatch):
 
 
 def test_process_happy_path(monkeypatch):
+    from app.memory.manager import ConversationContext
+
     client = TestClient(app)
     monkeypatch.setattr("app.main.validate_app_request_signature", lambda **_kwargs: None)
     monkeypatch.setattr("app.main._create_guest_conversation", lambda **_kwargs: "conv-1")
@@ -103,6 +105,14 @@ def test_process_happy_path(monkeypatch):
         "app.main.get_parameters",
         lambda _tenant_id: {"confidence_threshold": 0.6},
     )
+    monkeypatch.setattr(
+        "app.main.memory_load_context",
+        lambda _conversation_id: ConversationContext(conversation_id=_conversation_id),
+    )
+    monkeypatch.setattr("app.main.memory_append_turn", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.main.memory_maybe_compress", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("app.main.get_cached_faq_answer", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.main.cache_faq_answer", lambda *_args, **_kwargs: None)
 
     class FakeOrchestrator:
         def invoke(self, _normalized):

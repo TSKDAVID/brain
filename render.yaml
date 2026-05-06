@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: chaster-brain-api
+    runtime: python
+    pythonVersion: "3.11"
+    plan: free
+    autoDeploy: true
+    region: frankfurt
+    rootDir: .
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -e .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2 --proxy-headers --forwarded-allow-ips '*'
+    healthCheckPath: /health
+    envVars:
+      - key: CHASTER_BRAIN_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_ISSUER
+        sync: false
+      - key: SUPABASE_JWKS_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: WIDGET_SESSION_SECRET
+        generateValue: true
+      - key: WIDGET_SESSION_TTL_SECONDS
+        value: "1800"
+      - key: SIGNATURE_MAX_AGE_SECONDS
+        value: "300"
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      # Leave CHASTER_BRAIN_DEV_GATEWAY_SECRET unset in production.
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: chaster-brain-redis
+          property: connectionString
+
+  - type: keyvalue
+    name: chaster-brain-redis
+    plan: free
+    region: frankfurt
+    ipAllowList: []

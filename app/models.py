@@ -31,6 +31,8 @@ class WidgetHandshakeRequest(BaseModel):
     guest_id: str | None = None
     guest_name: str | None = Field(default=None, max_length=120)
     guest_email: str | None = Field(default=None, max_length=320)
+    conversation_id: str | None = None
+    previous_session_token: str | None = None
 
 
 class WidgetHandshakeResponse(BaseModel):
@@ -43,6 +45,7 @@ class WidgetHandshakeResponse(BaseModel):
     conversation_id: str | None = None
     support_case_id: str | None = None
     ai_handling: bool = True
+    resumed: bool = False
 
 
 class WidgetProcessRequest(BaseModel):

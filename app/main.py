@@ -4,7 +4,7 @@ from uuid import UUID
 
 import jwt
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_cors_origins, get_settings
@@ -24,6 +24,12 @@ from app.gateway.service import (
     validate_request_security,
     validate_tenant_access_token,
 )
+from app.memory import (
+    append_turn as memory_append_turn,
+    load_context as memory_load_context,
+    maybe_compress as memory_maybe_compress,
+    reset_conversation_cache,
+)
 from app.models import (
     DashboardStatsResponse,
     GatewayMessageRequest,
@@ -42,6 +48,7 @@ from app.models import (
     WidgetProcessResponse,
 )
 from app.orchestrator.graph import build_graph
+from app.rag.retriever import cache_faq_answer, get_cached_faq_answer
 
 app = FastAPI(title="Chaster Brain", version="0.1.0")
 orchestrator = build_graph()
@@ -264,6 +271,30 @@ def _create_guest_conversation(*, tenant_id: str, guest_name: str | None, guest_
     return row.get("id")
 
 
+def _try_resume_conversation(*, tenant_id: str, conversation_id: str) -> dict | None:
+    """Look up an existing conversation row for resume, scoped to the tenant.
+
+    Returns the row when the conversation belongs to the tenant; None otherwise
+    (caller will create a new conversation in that case).
+    """
+
+    try:
+        UUID(str(conversation_id))
+    except ValueError:
+        return None
+    try:
+        row = get_single_row(
+            "conversations",
+            select="id,tenant_id,name,last_message_preview",
+            filters={"id": conversation_id, "tenant_id": tenant_id},
+        )
+    except Exception:
+        return None
+    if not row:
+        return None
+    return row
+
+
 def _generate_case_number() -> str:
     suffix = secrets.token_hex(3).upper()
     timestamp = datetime.now(timezone.utc).strftime("%H%M%S")
@@ -371,11 +402,25 @@ def handshake(
 
     # Backward compatibility path: allow passing caller JWT; currently optional for compatibility mode.
     _ = authorization
-    conversation_id = _create_guest_conversation(
-        tenant_id=payload.tenant_id,
-        guest_name=payload.guest_name,
-        guest_email=payload.guest_email,
-    )
+
+    resumed = False
+    conversation_id: str | None = None
+    if payload.conversation_id:
+        existing = _try_resume_conversation(
+            tenant_id=payload.tenant_id,
+            conversation_id=str(payload.conversation_id),
+        )
+        if existing and existing.get("id"):
+            conversation_id = str(existing["id"])
+            resumed = True
+
+    if conversation_id is None:
+        conversation_id = _create_guest_conversation(
+            tenant_id=payload.tenant_id,
+            guest_name=payload.guest_name,
+            guest_email=payload.guest_email,
+        )
+
     support_case_id = _ensure_widget_support_case(
         tenant_id=payload.tenant_id,
         guest_name=payload.guest_name,
@@ -406,12 +451,21 @@ def handshake(
         conversation_id=conversation_id,
         support_case_id=support_case_id,
         ai_handling=ai_handling,
+        resumed=resumed,
     )
+
+
+def _history_to_chat(history) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for turn in history:
+        out.append({"role": turn.role, "body": turn.body})
+    return out
 
 
 @app.post("/v1/process", response_model=WidgetProcessResponse)
 def process_widget_message(
     payload: WidgetProcessRequest,
+    background_tasks: BackgroundTasks,
     authorization: str = Header(default="", alias="Authorization"),
     x_signature: str = Header(default="", alias="X-Signature"),
     x_timestamp: str = Header(default="", alias="X-Timestamp"),
@@ -451,13 +505,37 @@ def process_widget_message(
             state="human_needed",
         )
 
-    normalized = {
-        "tenant_id": payload.tenant_id,
-        "app_id": payload.app_id,
-        "message": payload.message,
-        "metadata": payload.metadata,
-    }
-    state = orchestrator.invoke(normalized)
+    conversation_id = session_claims.get("conversation_id")
+    support_case_id = session_claims.get("support_case_id")
+
+    memory_context = memory_load_context(conversation_id)
+    history_payload = _history_to_chat(memory_context.history)
+
+    state: dict | None = None
+    if not memory_context.history:
+        # FAQ answer cache fast-path (only for stateless first turns; the
+        # second-and-later messages depend on conversation context).
+        cached = get_cached_faq_answer(payload.tenant_id, payload.message)
+        if cached:
+            state = {
+                "intent": "faq_or_general",
+                "confidence": float(cached.get("confidence", 0.85)),
+                "response": str(cached.get("response", "")),
+                "used_sources": list(cached.get("sources") or []),
+                "cache_hit": True,
+            }
+
+    if state is None:
+        normalized = {
+            "tenant_id": payload.tenant_id,
+            "app_id": payload.app_id,
+            "message": payload.message,
+            "metadata": payload.metadata,
+            "conversation_id": conversation_id,
+            "summary": memory_context.summary,
+            "history": history_payload,
+        }
+        state = orchestrator.invoke(normalized)
     params = get_parameters(payload.tenant_id)
     if (
         state.get("intent") == "complex_personal_request"
@@ -467,9 +545,22 @@ def process_widget_message(
             "I need a little more verified context to answer accurately. "
             "Please provide one specific identifier (order id, invoice id, or account email)."
         )
+
+    # Cache successful FAQ answers so repeat visitors get sub-100ms replies.
+    if (
+        state.get("intent") == "faq_or_general"
+        and float(state["confidence"]) >= float(params["confidence_threshold"])
+        and not memory_context.history
+    ):
+        cache_faq_answer(
+            payload.tenant_id,
+            payload.message,
+            response=state["response"],
+            sources=state.get("used_sources", []),
+            confidence=float(state["confidence"]),
+        )
+
     record_ai_request(payload.tenant_id, state["intent"], float(state["confidence"]))
-    conversation_id = session_claims.get("conversation_id")
-    support_case_id = session_claims.get("support_case_id")
     if conversation_id:
         insert_row(
             "messages",
@@ -486,6 +577,16 @@ def process_widget_message(
                 "sender_id": None,
                 "body": state["response"],
             },
+        )
+        memory_append_turn(
+            conversation_id,
+            user_message=payload.message,
+            assistant_message=state["response"],
+        )
+        background_tasks.add_task(
+            memory_maybe_compress,
+            conversation_id,
+            tenant_id=payload.tenant_id,
         )
     if support_case_id:
         insert_row(
@@ -521,6 +622,92 @@ def process_widget_message(
         ai_handling=True,
         state="unresolved",
     )
+
+
+@app.post("/v1/widget/reset")
+def widget_reset(
+    authorization: str = Header(default="", alias="Authorization"),
+    tenant_id: str = Header(default="", alias="X-Tenant-Id"),
+    app_id: str = Header(default="", alias="X-App-Id"),
+):
+    """Drop server-side memory caches for a widget conversation.
+
+    The widget calls this when the user clicks "Reset chat" so any cached
+    summaries or hot turns are forgotten before a fresh handshake. The
+    persisted Supabase rows remain untouched (we only reset memory that
+    affects future replies); the next handshake creates a brand new
+    conversation_id when no `conversation_id` is provided in its body.
+    """
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing session bearer token")
+    session_token = authorization.split(" ", maxsplit=1)[1]
+    claims = _decode_widget_session_token(
+        session_token,
+        tenant_id=tenant_id,
+        app_id=app_id,
+    )
+    conversation_id = claims.get("conversation_id")
+    reset_conversation_cache(conversation_id)
+    return {"status": "reset", "conversation_id": conversation_id}
+
+
+@app.get("/v1/widget/messages")
+def widget_messages(
+    authorization: str = Header(default="", alias="Authorization"),
+    tenant_id: str = Header(default="", alias="X-Tenant-Id"),
+    app_id: str = Header(default="", alias="X-App-Id"),
+    limit: int = 30,
+):
+    """Return recent verbatim messages for the conversation in the session token.
+
+    The widget calls this on resume so it can re-render the previous chat
+    without trusting the contents stored in localStorage (defense-in-depth).
+    """
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing session bearer token")
+    session_token = authorization.split(" ", maxsplit=1)[1]
+    claims = _decode_widget_session_token(
+        session_token,
+        tenant_id=tenant_id,
+        app_id=app_id,
+    )
+    conversation_id = claims.get("conversation_id")
+    if not conversation_id:
+        return {"conversation_id": None, "messages": []}
+
+    safe_limit = max(1, min(int(limit or 30), 100))
+    try:
+        from app.db.client import get_rows as _get_rows
+
+        rows = _get_rows(
+            table="messages",
+            select="id,sender_id,body,created_at",
+            filters={"conversation_id": conversation_id},
+            limit=safe_limit,
+            order="created_at.desc",
+        )
+    except Exception:
+        rows = []
+
+    rows = list(reversed(rows))
+    out = []
+    for row in rows:
+        body = str(row.get("body") or "").strip()
+        if not body:
+            continue
+        sender = row.get("sender_id")
+        role = "ai" if sender is None else "user"
+        out.append(
+            {
+                "id": row.get("id"),
+                "role": role,
+                "body": body,
+                "created_at": row.get("created_at"),
+            }
+        )
+    return {"conversation_id": conversation_id, "messages": out}
 
 
 @app.post("/v1/gateway/message", response_model=GatewayMessageResponse)

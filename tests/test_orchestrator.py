@@ -3,7 +3,11 @@ from app.orchestrator import nodes
 
 
 def test_routes_to_faq_for_general_prompt(monkeypatch):
-    monkeypatch.setattr(nodes, "retrieve_faq_context", lambda *_args, **_kwargs: ("FAQ chunk", ["chunk-1"]))
+    monkeypatch.setattr(
+        nodes,
+        "retrieve_faq_context",
+        lambda *_args, **_kwargs: ("FAQ chunk", ["chunk-1"], 0.7),
+    )
     monkeypatch.setattr(
         nodes,
         "get_parameters",
@@ -19,7 +23,7 @@ def test_routes_to_faq_for_general_prompt(monkeypatch):
         {
             "tenant_id": "t1",
             "app_id": "app-12345678",
-            "message": "Hello there",
+            "message": "Hello there, what are your hours?",
             "metadata": {},
         }
     )
@@ -49,3 +53,45 @@ def test_routes_to_personal_for_account_prompt(monkeypatch):
     )
     assert result["intent"] == "complex_personal_request"
     assert "mcp:company_data" in result["used_sources"]
+
+
+def test_faq_node_threads_history_and_summary_into_llm(monkeypatch):
+    captured: dict = {}
+
+    def fake_generate_answer(**kwargs):
+        captured.update(kwargs)
+        return "echo"
+
+    monkeypatch.setattr(
+        nodes,
+        "retrieve_faq_context",
+        lambda *_args, **_kwargs: ("FAQ chunk", ["chunk-1"], 0.6),
+    )
+    monkeypatch.setattr(
+        nodes,
+        "get_parameters",
+        lambda *_args, **_kwargs: {"response_tone": "professional"},
+    )
+    monkeypatch.setattr(nodes, "generate_answer", fake_generate_answer)
+
+    graph = build_graph()
+    graph.invoke(
+        {
+            "tenant_id": "t1",
+            "app_id": "app-12345678",
+            "message": "What are the support hours?",
+            "metadata": {},
+            "summary": "Earlier the user introduced themselves as Sara.",
+            "history": [
+                {"role": "user", "body": "Hi, I'm Sara."},
+                {"role": "assistant", "body": "Hi Sara!"},
+            ],
+        }
+    )
+
+    assert captured["summary"].startswith("Earlier the user")
+    history = list(captured["history"])
+    assert history == [
+        {"role": "user", "content": "Hi, I'm Sara."},
+        {"role": "assistant", "content": "Hi Sara!"},
+    ]

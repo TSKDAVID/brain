@@ -1,5 +1,7 @@
 from datetime import date
 
+from app.cache import cache_delete, cache_get_json, cache_set_json
+from app.config import get_settings
 from app.db.client import count_rows, get_single_row, insert_row, upsert_row
 from app.models import (
     DashboardStatsResponse,
@@ -9,8 +11,23 @@ from app.models import (
 )
 
 
+def _runtime_cache_key(tenant_id: str) -> str:
+    return f"brain:runtime:{tenant_id}"
+
+
+def _parameters_cache_key(tenant_id: str) -> str:
+    return f"brain:params:{tenant_id}"
+
+
+def invalidate_tenant_cache(tenant_id: str) -> None:
+    """Drop cached runtime + parameters rows for a tenant."""
+
+    cache_delete(_runtime_cache_key(tenant_id))
+    cache_delete(_parameters_cache_key(tenant_id))
+
+
 def set_runtime_control(payload: RuntimeControlUpdate) -> dict:
-    return upsert_row(
+    row = upsert_row(
         "brain_runtime_control",
         {
             "tenant_id": payload.tenant_id,
@@ -20,21 +37,36 @@ def set_runtime_control(payload: RuntimeControlUpdate) -> dict:
         },
         on_conflict="tenant_id",
     ) or {}
+    cache_delete(_runtime_cache_key(payload.tenant_id))
+    return row
 
 
 def get_runtime_control(tenant_id: str) -> dict:
+    cache_key = _runtime_cache_key(tenant_id)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, dict) and cached:
+        return cached
+
     row = get_single_row(
         "brain_runtime_control",
         select="tenant_id,is_running,mode,updated_at",
         filters={"tenant_id": tenant_id},
     )
-    if row:
-        return row
-    return set_runtime_control(RuntimeControlUpdate(tenant_id=tenant_id, is_running=True, mode="automatic"))
+    if not row:
+        row = set_runtime_control(
+            RuntimeControlUpdate(tenant_id=tenant_id, is_running=True, mode="automatic")
+        )
+
+    cache_set_json(
+        cache_key,
+        row,
+        ttl_seconds=get_settings().runtime_cache_ttl_seconds,
+    )
+    return row
 
 
 def set_parameters(payload: ParametersUpdateRequest) -> dict:
-    return upsert_row(
+    row = upsert_row(
         "brain_parameters",
         {
             "tenant_id": payload.tenant_id,
@@ -46,25 +78,38 @@ def set_parameters(payload: ParametersUpdateRequest) -> dict:
         },
         on_conflict="tenant_id",
     ) or {}
+    cache_delete(_parameters_cache_key(payload.tenant_id))
+    return row
 
 
 def get_parameters(tenant_id: str) -> dict:
+    cache_key = _parameters_cache_key(tenant_id)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, dict) and cached:
+        return cached
+
     row = get_single_row(
         "brain_parameters",
         select="tenant_id,confidence_threshold,max_context_chunks,response_tone,mcp_enabled,updated_at",
         filters={"tenant_id": tenant_id},
     )
-    if row:
-        return row
-    return set_parameters(
-        ParametersUpdateRequest(
-            tenant_id=tenant_id,
-            confidence_threshold=0.6,
-            max_context_chunks=8,
-            response_tone="professional",
-            mcp_enabled=True,
+    if not row:
+        row = set_parameters(
+            ParametersUpdateRequest(
+                tenant_id=tenant_id,
+                confidence_threshold=0.6,
+                max_context_chunks=8,
+                response_tone="professional",
+                mcp_enabled=True,
+            )
         )
+
+    cache_set_json(
+        cache_key,
+        row,
+        ttl_seconds=get_settings().parameters_cache_ttl_seconds,
     )
+    return row
 
 
 def create_index_job(payload: IndexDataRequest) -> dict:

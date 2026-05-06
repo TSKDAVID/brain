@@ -19,6 +19,16 @@ class Settings(BaseSettings):
     chaster_brain_dev_gateway_secret: str | None = None
     widget_session_secret: str = "dev-widget-session-secret-change-me"
     widget_session_ttl_seconds: int = 900
+    redis_url: str | None = None
+    memory_recent_turns: int = 8
+    memory_compress_after_messages: int = 16
+    memory_compress_token_budget: int = 1800
+    memory_summary_ttl_seconds: int = 60 * 60 * 24
+    memory_hot_ttl_seconds: int = 60 * 30
+    intent_cache_ttl_seconds: int = 60 * 10
+    faq_cache_ttl_seconds: int = 60 * 5
+    runtime_cache_ttl_seconds: int = 60
+    parameters_cache_ttl_seconds: int = 60
 
 
 def get_settings() -> Settings:

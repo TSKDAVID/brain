@@ -1,4 +1,5 @@
 import logging
+from typing import Iterable
 
 import httpx
 
@@ -15,7 +16,56 @@ def _fallback_no_llm(retrieved_context: str, user_message: str) -> str:
     )
 
 
-def generate_answer(*, user_message: str, retrieved_context: str, response_tone: str) -> str:
+def _build_messages(
+    *,
+    system_prompt: str,
+    summary: str,
+    history: Iterable[dict[str, str]] | None,
+    retrieved_context: str,
+    user_message: str,
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    if summary and summary.strip():
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Conversation summary so far (older turns compressed):\n"
+                    f"{summary.strip()}"
+                ),
+            }
+        )
+    if history:
+        for turn in history:
+            role = turn.get("role")
+            content = turn.get("content") or turn.get("body") or ""
+            if not content:
+                continue
+            if role not in {"user", "assistant", "system"}:
+                role = "user" if role == "visitor" else "assistant"
+            messages.append({"role": role, "content": content})
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                "CONTEXT (for you to use, not to quote in full):\n"
+                f"{retrieved_context}\n\n"
+                "USER QUESTION:\n"
+                f"{user_message}"
+            ),
+        }
+    )
+    return messages
+
+
+def generate_answer(
+    *,
+    user_message: str,
+    retrieved_context: str,
+    response_tone: str,
+    summary: str = "",
+    history: Iterable[dict[str, str]] | None = None,
+) -> str:
     settings = get_settings()
     if not settings.groq_api_key:
         return _fallback_no_llm(retrieved_context, user_message)
@@ -23,27 +73,23 @@ def generate_answer(*, user_message: str, retrieved_context: str, response_tone:
     system_prompt = (
         "You are Chaster Brain, a customer support assistant. "
         f"Use a {response_tone} tone. "
-        "You will receive CONTEXT snippets (may be partial) and a USER QUESTION. "
+        "You will receive optional CONVERSATION SUMMARY, prior chat turns, "
+        "CONTEXT snippets (may be partial) and a USER QUESTION. "
         "Reply with a direct answer to that question only. "
-        "Use 2–6 short sentences. Do NOT paste the context verbatim or repeat entire policy sections. "
-        "If the context does not contain the answer, say what is missing in one sentence."
+        "Use 2-6 short sentences. Do NOT paste the context verbatim or repeat entire policy sections. "
+        "If something is unclear, ask one focused clarifying question."
     )
     payload = {
         "model": settings.groq_model,
         "temperature": 0.4,
         "max_tokens": 512,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    "CONTEXT (for you to use, not to quote in full):\n"
-                    f"{retrieved_context}\n\n"
-                    "USER QUESTION:\n"
-                    f"{user_message}"
-                ),
-            },
-        ],
+        "messages": _build_messages(
+            system_prompt=system_prompt,
+            summary=summary,
+            history=history,
+            retrieved_context=retrieved_context,
+            user_message=user_message,
+        ),
     }
 
     try:
