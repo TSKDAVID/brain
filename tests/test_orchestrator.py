@@ -95,3 +95,36 @@ def test_faq_node_threads_history_and_summary_into_llm(monkeypatch):
         {"role": "user", "content": "Hi, I'm Sara."},
         {"role": "assistant", "content": "Hi Sara!"},
     ]
+
+
+def test_faq_keeps_llm_answer_when_retrieval_is_weak(monkeypatch):
+    """Thin KB context must not trigger the personal low-confidence boilerplate."""
+    monkeypatch.setattr(
+        nodes,
+        "retrieve_faq_context",
+        lambda *_args, **_kwargs: ("", [], 0.05),
+    )
+    monkeypatch.setattr(
+        nodes,
+        "get_parameters",
+        lambda *_args, **_kwargs: {
+            "response_tone": "professional",
+            "mcp_enabled": True,
+            "max_context_chunks": 8,
+            "confidence_threshold": 0.6,
+        },
+    )
+    monkeypatch.setattr(nodes, "generate_answer", lambda **_kwargs: "Friendly FAQ reply")
+
+    graph = build_graph()
+    result = graph.invoke(
+        {
+            "tenant_id": "t1",
+            "app_id": "app-12345678",
+            "message": "hi",
+            "metadata": {},
+        }
+    )
+    assert result["intent"] == "faq_or_general"
+    assert result["response"] == "Friendly FAQ reply"
+    assert "verified context" not in result["response"].lower()

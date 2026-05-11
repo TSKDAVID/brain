@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from typing import Tuple
 
 from app.cache import cache_get_json, cache_set_json
@@ -62,6 +63,18 @@ _GENERIC_MARKERS = (
     "can i",
 )
 
+_GREETING_RE = re.compile(
+    r"(?:"
+    r"hi(?:\s+there|\s+everyone|\s+all)?|"
+    r"hello(?:\s+there)?|"
+    r"hey(?:\s+there)?|"
+    r"yo|howdy|greetings|gm|"
+    r"thanks?|thank\s+you|thx|ty|"
+    r"bye|goodbye|"
+    r"good\s+(?:morning|afternoon|evening|night)"
+    r")[!,. ]*",
+)
+
 
 def _normalize(message: str) -> str:
     return (message or "").strip().lower()
@@ -76,6 +89,8 @@ def _rule_based_classify(message: str) -> Tuple[Intent, float]:
     msg = _normalize(message)
     if not msg:
         return "faq_or_general", 0.5
+    if _GREETING_RE.fullmatch(msg):
+        return "faq_or_general", 0.88
     is_personal = any(marker in msg for marker in _PERSONAL_MARKERS)
     is_generic = any(marker in msg for marker in _GENERIC_MARKERS)
     if is_personal and not is_generic:
@@ -104,8 +119,9 @@ def _llm_classify(message: str) -> Tuple[Intent, float] | None:
         'Respond ONLY with JSON like {"intent": "faq_or_general", "confidence": 0.0-1.0} '
         "with no extra text."
     )
+    intent_model = (settings.groq_intent_model or settings.groq_model).strip()
     payload = {
-        "model": settings.groq_model,
+        "model": intent_model,
         "temperature": 0.0,
         "max_tokens": 40,
         "messages": [
@@ -122,7 +138,7 @@ def _llm_classify(message: str) -> Tuple[Intent, float] | None:
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=20.0,
+            timeout=12.0,
         )
         response.raise_for_status()
         body = response.json()
@@ -145,7 +161,11 @@ def _llm_classify(message: str) -> Tuple[Intent, float] | None:
         confidence = max(0.5, min(0.95, confidence))
         return intent, confidence
     except Exception as exc:
-        logger.debug("intent_llm: Groq call failed (%s); using rules", exc)
+        logger.debug(
+            "intent_llm: Groq call failed (%s); model=%s; using rules",
+            exc,
+            intent_model,
+        )
         return None
 
 

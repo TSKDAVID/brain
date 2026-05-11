@@ -1,6 +1,7 @@
 __pycache__/
 .pytest_cache/
 .env
+*.egg-info/
 
 dashboard/node_modules/
 dashboard/dist/

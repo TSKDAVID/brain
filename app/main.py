@@ -215,6 +215,15 @@ def sandbox_message(payload: SandboxMessageRequest, authorization: str = Header(
         "metadata": {"source": "portal_settings_sandbox"},
     }
     state = orchestrator.invoke(normalized)
+    params = get_parameters(payload.tenant_id)
+    if (
+        state.get("intent") == "complex_personal_request"
+        and float(state["confidence"]) < float(params["confidence_threshold"])
+    ):
+        state["response"] = (
+            "I need a little more verified context to answer accurately. "
+            "Please provide one specific identifier (order id, invoice id, or account email)."
+        )
     record_ai_request(payload.tenant_id, state["intent"], float(state["confidence"]))
     return SandboxMessageResponse(
         tenant_id=payload.tenant_id,

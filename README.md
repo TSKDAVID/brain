@@ -28,7 +28,8 @@ npx supabase db push --yes --linked
 
 1. Create `.env` from `.env.example`.
    - Set `GROQ_API_KEY`
-   - Keep `GROQ_MODEL=llama-3.3-70b-versatile`
+   - Keep `GROQ_MODEL=llama-3.3-70b-versatile` for answer generation (and memory compression).
+   - Optional: `GROQ_INTENT_MODEL` defaults to `openai/gpt-oss-20b` for fast intent routing (tiny JSON).
    - `REDIS_URL` is optional locally — leave it empty to use the in-process shim.
 2. Install Python deps:
 

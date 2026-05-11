@@ -27,6 +27,8 @@ services:
         sync: false
       - key: GROQ_MODEL
         value: llama-3.3-70b-versatile
+      - key: GROQ_INTENT_MODEL
+        value: openai/gpt-oss-20b
       - key: WIDGET_SESSION_SECRET
         generateValue: true
       - key: WIDGET_SESSION_TTL_SECONDS

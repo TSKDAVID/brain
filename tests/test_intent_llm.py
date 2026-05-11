@@ -9,6 +9,7 @@ def _settings_without_groq():
         groq_api_key=None,
         groq_api_base_url="https://api.groq.com/openai/v1",
         groq_model="llama-3.3-70b-versatile",
+        groq_intent_model="openai/gpt-oss-20b",
         intent_cache_ttl_seconds=600,
     )
 
@@ -18,6 +19,7 @@ def _settings_with_groq():
         groq_api_key="test-key",
         groq_api_base_url="https://api.groq.com/openai/v1",
         groq_model="llama-3.3-70b-versatile",
+        groq_intent_model="openai/gpt-oss-20b",
         intent_cache_ttl_seconds=600,
     )
 
@@ -35,6 +37,14 @@ def test_rules_classify_general(monkeypatch):
     monkeypatch.setattr(intent_llm, "get_settings", _settings_without_groq)
     intent, _confidence = intent_llm.classify_intent("What are your support hours?")
     assert intent == "faq_or_general"
+
+
+def test_rules_classify_bare_hi(monkeypatch):
+    reset_cache_for_tests()
+    monkeypatch.setattr(intent_llm, "get_settings", _settings_without_groq)
+    intent, confidence = intent_llm.classify_intent("hi")
+    assert intent == "faq_or_general"
+    assert confidence >= 0.85
 
 
 def test_classify_intent_uses_cache(monkeypatch):

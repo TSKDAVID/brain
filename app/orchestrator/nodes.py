@@ -91,9 +91,7 @@ def confidence_node(state: OrchestratorState) -> OrchestratorState:
         confidence = 0.42
 
     state["confidence"] = confidence
-    if confidence < 0.5:
-        state["response"] = (
-            "I want to be precise here. I need a bit more verified context before giving a final answer. "
-            "Please share a specific reference (order id, invoice id, or account email)."
-        )
+    # Low-confidence copy for account-specific flows is applied in API handlers
+    # (`/v1/gateway/message`, widget message, sandbox) so FAQ/general answers are
+    # never replaced here when retrieval is thin.
     return state

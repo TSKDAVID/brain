@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     groq_api_base_url: str = "https://api.groq.com/openai/v1"
     # Groq model id (see https://console.groq.com/docs/models); set GROQ_MODEL in .env.
     groq_model: str = "llama-3.3-70b-versatile"
+    # Small, fast model for intent routing only (JSON label). Keeps main GROQ_MODEL for answers.
+    # Default: openai/gpt-oss-20b (~highest Groq throughput for short completions). Override with GROQ_INTENT_MODEL.
+    groq_intent_model: str = "openai/gpt-oss-20b"
     cors_allow_origins: str = "http://localhost:5174,http://127.0.0.1:5174"
     # Local testing only: if set, requests with matching X-Chaster-Dev-Secret skip JWT (HMAC + app config still enforced).
     chaster_brain_dev_gateway_secret: str | None = None
