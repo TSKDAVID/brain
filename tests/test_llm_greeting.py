@@ -3,6 +3,20 @@ from types import SimpleNamespace
 from app.orchestrator import llm
 
 
+def test_build_messages_marks_latest_user_for_coreference():
+    msgs = llm._build_messages(
+        system_prompt="sys",
+        summary="",
+        history=[{"role": "assistant", "body": "Would you prefer a return or an exchange?"}],
+        retrieved_context="KB snippet",
+        user_message="which one would you suggest",
+    )
+    last = msgs[-1]
+    assert last["role"] == "user"
+    assert "LATEST USER MESSAGE" in last["content"]
+    assert "which one would you suggest" in last["content"]
+
+
 def test_greeting_skips_groq_when_kb_empty(monkeypatch):
     class Boom:
         @staticmethod
