@@ -43,7 +43,8 @@ def _query_hash(tenant_id: str, query: str) -> str:
 
 
 def _faq_answer_cache_key(tenant_id: str, query: str) -> str:
-    return f"faq:ans:{_query_hash(tenant_id, query)}"
+    # v2: drop answers cached under older orchestration / prompts.
+    return f"faq:ans:v2:{_query_hash(tenant_id, query)}"
 
 
 def _rerank(rows: Iterable[dict], query: str) -> list[dict]:

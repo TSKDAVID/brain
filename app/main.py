@@ -48,10 +48,27 @@ from app.models import (
     WidgetProcessResponse,
 )
 from app.orchestrator.graph import build_graph
+from app.orchestrator.intent_llm import is_light_greeting
 from app.rag.retriever import cache_faq_answer, get_cached_faq_answer
 
 app = FastAPI(title="Chaster Brain", version="0.1.0")
 orchestrator = build_graph()
+
+
+def _maybe_apply_personal_low_confidence_response(*, message: str, state: dict, params: dict) -> None:
+    """Replace answer only for true account-specific flows, never whole-message greetings."""
+    if is_light_greeting(message or ""):
+        return
+    if (
+        state.get("intent") == "complex_personal_request"
+        and float(state["confidence"]) < float(params["confidence_threshold"])
+    ):
+        state["response"] = (
+            "I need a little more verified context to answer accurately. "
+            "Please provide one specific identifier (order id, invoice id, or account email)."
+        )
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_origins(),
@@ -216,14 +233,9 @@ def sandbox_message(payload: SandboxMessageRequest, authorization: str = Header(
     }
     state = orchestrator.invoke(normalized)
     params = get_parameters(payload.tenant_id)
-    if (
-        state.get("intent") == "complex_personal_request"
-        and float(state["confidence"]) < float(params["confidence_threshold"])
-    ):
-        state["response"] = (
-            "I need a little more verified context to answer accurately. "
-            "Please provide one specific identifier (order id, invoice id, or account email)."
-        )
+    _maybe_apply_personal_low_confidence_response(
+        message=payload.message, state=state, params=params
+    )
     record_ai_request(payload.tenant_id, state["intent"], float(state["confidence"]))
     return SandboxMessageResponse(
         tenant_id=payload.tenant_id,
@@ -546,14 +558,9 @@ def process_widget_message(
         }
         state = orchestrator.invoke(normalized)
     params = get_parameters(payload.tenant_id)
-    if (
-        state.get("intent") == "complex_personal_request"
-        and float(state["confidence"]) < float(params["confidence_threshold"])
-    ):
-        state["response"] = (
-            "I need a little more verified context to answer accurately. "
-            "Please provide one specific identifier (order id, invoice id, or account email)."
-        )
+    _maybe_apply_personal_low_confidence_response(
+        message=payload.message, state=state, params=params
+    )
 
     # Cache successful FAQ answers so repeat visitors get sub-100ms replies.
     if (
@@ -773,15 +780,9 @@ def process_message(
 
     state = orchestrator.invoke(normalized)
     params = get_parameters(payload.tenant_id)
-    # Low-confidence guard is for personal / account-specific flows, not FAQ greetings or general questions.
-    if (
-        state.get("intent") == "complex_personal_request"
-        and float(state["confidence"]) < float(params["confidence_threshold"])
-    ):
-        state["response"] = (
-            "I need a little more verified context to answer accurately. "
-            "Please provide one specific identifier (order id, invoice id, or account email)."
-        )
+    _maybe_apply_personal_low_confidence_response(
+        message=payload.message, state=state, params=params
+    )
     record_ai_request(payload.tenant_id, state["intent"], float(state["confidence"]))
     return GatewayMessageResponse(
         tenant_id=payload.tenant_id,

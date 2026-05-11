@@ -47,6 +47,31 @@ def test_rules_classify_bare_hi(monkeypatch):
     assert confidence >= 0.85
 
 
+def test_hi_short_circuits_before_llm(monkeypatch):
+    reset_cache_for_tests()
+    monkeypatch.setattr(intent_llm, "get_settings", _settings_with_groq)
+
+    def boom(_msg):
+        raise AssertionError("intent LLM should not run for bare hi")
+
+    monkeypatch.setattr(intent_llm, "_llm_classify", boom)
+    intent, confidence = intent_llm.classify_intent("hi")
+    assert intent == "faq_or_general"
+    assert confidence >= 0.9
+
+
+def test_rules_faq_overrides_llm_personal(monkeypatch):
+    reset_cache_for_tests()
+    monkeypatch.setattr(intent_llm, "get_settings", _settings_with_groq)
+    monkeypatch.setattr(
+        intent_llm,
+        "_llm_classify",
+        lambda _m: ("complex_personal_request", 0.85),
+    )
+    intent, _confidence = intent_llm.classify_intent("What are your support hours?")
+    assert intent == "faq_or_general"
+
+
 def test_classify_intent_uses_cache(monkeypatch):
     reset_cache_for_tests()
     monkeypatch.setattr(intent_llm, "get_settings", _settings_without_groq)

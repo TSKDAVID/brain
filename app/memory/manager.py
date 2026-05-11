@@ -127,12 +127,16 @@ def _supabase_history(conversation_id: str, *, limit: int) -> list[HistoryTurn]:
         return []
     rows = list(reversed(rows))
     out: list[HistoryTurn] = []
-    for row in rows:
+    all_senders_null = all(row.get("sender_id") is None for row in rows)
+    for i, row in enumerate(rows):
         body = str(row.get("body") or "").strip()
         if not body:
             continue
         sender = row.get("sender_id")
-        role = "assistant" if sender is None else "user"
+        if all_senders_null:
+            role = "user" if i % 2 == 0 else "assistant"
+        else:
+            role = "assistant" if sender is None else "user"
         out.append(HistoryTurn(role=role, body=body))
     return out
 
@@ -179,7 +183,7 @@ def load_context(
             try:
                 cache_lpush(
                     _hot_key(conversation_id),
-                    [_serialize_turn(turn) for turn in reversed(history)],
+                    [_serialize_turn(turn) for turn in history],
                     ttl_seconds=settings.memory_hot_ttl_seconds,
                 )
                 cache_ltrim(_hot_key(conversation_id), 0, HOT_LIST_MAX - 1)
@@ -231,10 +235,10 @@ def append_turn(
         return
     settings = get_settings()
     items: list[str] = []
-    if assistant_message and assistant_message.strip():
-        items.append(_serialize_turn(HistoryTurn(role="assistant", body=assistant_message.strip())))
     if user_message and user_message.strip():
         items.append(_serialize_turn(HistoryTurn(role="user", body=user_message.strip())))
+    if assistant_message and assistant_message.strip():
+        items.append(_serialize_turn(HistoryTurn(role="assistant", body=assistant_message.strip())))
     if not items:
         return
     try:

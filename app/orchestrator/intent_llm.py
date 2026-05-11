@@ -63,6 +63,8 @@ _GENERIC_MARKERS = (
     "can i",
 )
 
+# Whole-message greetings / light acknowledgements (substring markers like "hi"
+# would false-match inside unrelated words).
 _GREETING_RE = re.compile(
     r"(?:"
     r"hi(?:\s+there|\s+everyone|\s+all)?|"
@@ -76,13 +78,20 @@ _GREETING_RE = re.compile(
 )
 
 
+def is_light_greeting(message: str) -> bool:
+    """Whole-message hi/hello/thanks/etc. Used to skip slow intent LLM and bad reroutes."""
+    msg = _normalize(message)
+    return bool(msg and _GREETING_RE.fullmatch(msg))
+
+
 def _normalize(message: str) -> str:
     return (message or "").strip().lower()
 
 
 def _cache_key(message: str) -> str:
     digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:24]
-    return f"intent:{digest}"
+    # v3: invalidate stale intent entries (e.g. LLM once mis-routed "hi" to personal).
+    return f"intent:v3:{digest}"
 
 
 def _rule_based_classify(message: str) -> Tuple[Intent, float]:
@@ -173,6 +182,20 @@ def classify_intent(message: str) -> Tuple[Intent, float]:
     settings = get_settings()
     cache_key = _cache_key(message or "")
 
+    # Instant path: never call Groq for bare greetings / light thanks — avoids
+    # misclassification + ~1s latency. (Rules already agree, but the LLM could override.)
+    if is_light_greeting(message):
+        intent, confidence = "faq_or_general", 0.92
+        try:
+            cache_set_json(
+                cache_key,
+                {"intent": intent, "confidence": confidence},
+                ttl_seconds=settings.intent_cache_ttl_seconds,
+            )
+        except Exception:  # pragma: no cover
+            pass
+        return intent, confidence
+
     cached = cache_get_json(cache_key)
     if isinstance(cached, dict):
         intent = str(cached.get("intent") or "")
@@ -186,10 +209,20 @@ def classify_intent(message: str) -> Tuple[Intent, float]:
     if llm_result is None:
         intent, confidence = rule_intent, rule_conf
     else:
-        intent, confidence = llm_result
-        # Blend: when LLM agrees with rules we are even more confident.
-        if intent == rule_intent:
-            confidence = min(0.95, max(confidence, rule_conf + 0.05))
+        llm_intent, llm_conf = llm_result
+        # If cheap rules are clearly FAQ/general, do not let the LLM promote to personal
+        # (common source of slow MCP path + boilerplate replies on harmless text).
+        if (
+            llm_intent == "complex_personal_request"
+            and rule_intent == "faq_or_general"
+            and rule_conf >= 0.72
+        ):
+            intent, confidence = rule_intent, rule_conf
+        else:
+            intent, confidence = llm_intent, llm_conf
+            # Blend: when LLM agrees with rules we are even more confident.
+            if intent == rule_intent:
+                confidence = min(0.95, max(confidence, rule_conf + 0.05))
 
     try:
         cache_set_json(

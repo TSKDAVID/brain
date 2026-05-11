@@ -4,8 +4,25 @@ from typing import Iterable
 import httpx
 
 from app.config import get_settings
+from app.orchestrator.intent_llm import is_light_greeting
 
 logger = logging.getLogger(__name__)
+
+
+def _kb_context_is_empty(retrieved_context: str) -> bool:
+    c = (retrieved_context or "").strip().lower()
+    if not c:
+        return True
+    return "no indexed faq context" in c
+
+
+def _instant_greeting_reply(response_tone: str) -> str:
+    t = (response_tone or "professional").lower()
+    if "friendly" in t or "casual" in t:
+        return "Hey! Thanks for reaching out. What can I help you with today?"
+    if "formal" in t:
+        return "Hello. How may I assist you today?"
+    return "Hi! I'm here to help—what would you like to know?"
 
 
 def _fallback_no_llm(retrieved_context: str, user_message: str) -> str:
@@ -70,13 +87,32 @@ def generate_answer(
     if not settings.groq_api_key:
         return _fallback_no_llm(retrieved_context, user_message)
 
+    has_prior_turns = bool(history) and any(
+        (str(t.get("content") or t.get("body") or "")).strip() for t in history
+    )
+    if (
+        is_light_greeting(user_message)
+        and _kb_context_is_empty(retrieved_context)
+        and not has_prior_turns
+    ):
+        return _instant_greeting_reply(response_tone)
+
     system_prompt = (
         "You are Chaster Brain, a customer support assistant. "
         f"Use a {response_tone} tone. "
         "You will receive optional CONVERSATION SUMMARY, prior chat turns, "
         "CONTEXT snippets (may be partial) and a USER QUESTION. "
-        "Reply with a direct answer to that question only. "
+        "Treat the summary and prior turns as authoritative memory of this same chat: "
+        "build on them, refer back to facts the user already gave, and never claim you "
+        "cannot remember earlier messages in this thread. "
+        "Reply with a direct answer to the latest USER QUESTION. "
         "Use 2-6 short sentences. Do NOT paste the context verbatim or repeat entire policy sections. "
+        "For greetings or small talk, reply warmly in one or two short sentences without asking for "
+        "order numbers, invoice IDs, or account email unless the user clearly asked about their own order, "
+        "billing, or private account data. "
+        "If the user asks to speak with a human, live agent, or person, acknowledge the request, "
+        "briefly recap what they need help with from the thread, and say you are routing them or that a teammate will join shortly "
+        "(use the same tone; do not refuse because you are an AI). "
         "If something is unclear, ask one focused clarifying question."
     )
     payload = {

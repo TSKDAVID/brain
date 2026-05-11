@@ -26,7 +26,7 @@ def test_append_turn_pushes_to_hot_cache(monkeypatch):
         assistant_message="Hello back",
     )
     raw = cache_lrange("chat:hot:conv-1", 0, -1)
-    # Newest first; user message was pushed last so it sits at the head.
+    # Newest first: assistant turn should be at the head after visitor-then-assistant push order.
     assert any('"role": "user"' in item for item in raw)
     assert any('"role": "assistant"' in item for item in raw)
 
@@ -44,7 +44,7 @@ def test_load_context_reads_hot_cache_when_present(monkeypatch):
     ctx = manager.load_context("conv-2")
     assert ctx.conversation_id == "conv-2"
     bodies = [turn.body for turn in ctx.history]
-    assert "ping" in bodies and "pong" in bodies
+    assert bodies == ["ping", "pong"]
 
 
 def test_load_context_falls_back_to_supabase(monkeypatch):
@@ -100,6 +100,20 @@ def test_maybe_compress_persists_summary(monkeypatch):
     assert upserts[0]["payload"]["summary_text"] == "Compressed summary."
     cached_summary = cache_get_json("chat:summary:conv-4")
     assert cached_summary == {"summary_text": "Compressed summary."}
+
+
+def test_supabase_history_alternates_when_all_senders_null(monkeypatch):
+    monkeypatch.setattr(
+        manager,
+        "get_rows",
+        lambda **_kwargs: [
+            {"id": "2", "sender_id": None, "body": "AI reply", "created_at": "2026-01-01T00:00:02Z"},
+            {"id": "1", "sender_id": None, "body": "Visitor hi", "created_at": "2026-01-01T00:00:01Z"},
+        ],
+    )
+    turns = manager._supabase_history("c1", limit=10)
+    assert [t.role for t in turns] == ["user", "assistant"]
+    assert [t.body for t in turns] == ["Visitor hi", "AI reply"]
 
 
 def test_reset_conversation_cache_clears_keys(monkeypatch):
