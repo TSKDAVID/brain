@@ -31,3 +31,23 @@ def test_greeting_skips_groq_when_kb_empty(monkeypatch):
         response_tone="professional",
     )
     assert "help" in out.lower() or "hi" in out.lower()
+
+
+def test_memory_recall_uses_prior_user_turn_without_groq(monkeypatch):
+    class Boom:
+        @staticmethod
+        def post(*_args, **_kwargs):
+            raise AssertionError("Groq chat should not be called for memory recall")
+
+    monkeypatch.setattr(llm, "get_settings", lambda: SimpleNamespace(groq_api_key="k", groq_model="m"))
+    monkeypatch.setattr(llm, "httpx", Boom)
+    out = llm.generate_answer(
+        user_message="what did i say",
+        retrieved_context="No indexed FAQ context found for this tenant.",
+        response_tone="professional",
+        history=[
+            {"role": "user", "body": "hello"},
+            {"role": "assistant", "body": "Hi! I'm here to help."},
+        ],
+    )
+    assert 'You said: "hello".' == out

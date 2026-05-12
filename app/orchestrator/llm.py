@@ -25,6 +25,37 @@ def _instant_greeting_reply(response_tone: str) -> str:
     return "Hi! I'm here to help—what would you like to know?"
 
 
+def _is_memory_recall_request(user_message: str) -> bool:
+    msg = (user_message or "").strip().lower()
+    if not msg:
+        return False
+    markers = (
+        "what did i say",
+        "what did i just say",
+        "what was my last message",
+        "repeat what i said",
+        "do you remember what i said",
+    )
+    return any(m in msg for m in markers)
+
+
+def _memory_recall_reply(history: Iterable[dict[str, str]] | None) -> str | None:
+    if not history:
+        return None
+    user_turns: list[str] = []
+    for turn in history:
+        role = str(turn.get("role") or "")
+        if role != "user":
+            continue
+        body = str(turn.get("content") or turn.get("body") or "").strip()
+        if body:
+            user_turns.append(body)
+    if not user_turns:
+        return None
+    last = user_turns[-1]
+    return f'You said: "{last}".'
+
+
 def _fallback_no_llm(retrieved_context: str, user_message: str) -> str:
     excerpt = (retrieved_context or "").strip()[:1200]
     return (
@@ -91,6 +122,10 @@ def generate_answer(
     has_prior_turns = bool(history) and any(
         (str(t.get("content") or t.get("body") or "")).strip() for t in history
     )
+    if _is_memory_recall_request(user_message):
+        recalled = _memory_recall_reply(history)
+        if recalled:
+            return recalled
     if (
         is_light_greeting(user_message)
         and _kb_context_is_empty(retrieved_context)
