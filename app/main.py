@@ -55,7 +55,7 @@ from app.models import (
 from app.orchestrator.graph import build_graph
 from app.orchestrator.intent_llm import is_light_greeting
 from app.rag.retriever import cache_faq_answer, get_cached_faq_answer
-from app.support_suggest import suggest_support_reply
+from app.support_suggest import resolve_support_case_tenant, suggest_support_reply
 
 app = FastAPI(title="Chaster Brain", version="0.1.0")
 orchestrator = build_graph()
@@ -268,16 +268,20 @@ def support_suggest_reply(
     payload: SupportSuggestReplyRequest,
     authorization: str = Header(default="", alias="Authorization"),
 ):
-    _require_tenant_control_access(authorization, payload.tenant_id)
-    runtime = get_runtime_control(payload.tenant_id)
+    try:
+        case_tenant_id = resolve_support_case_tenant(payload.case_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    _require_tenant_control_access(authorization, case_tenant_id)
+    runtime = get_runtime_control(case_tenant_id)
     if not runtime.get("is_running", True):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             detail="Chaster Brain is currently stopped for this tenant",
         )
     try:
-        draft, sources = suggest_support_reply(
-            tenant_id=payload.tenant_id,
+        draft, sources, case_tenant_id = suggest_support_reply(
             case_id=payload.case_id,
             draft_hint=payload.draft_hint,
         )
@@ -287,7 +291,7 @@ def support_suggest_reply(
         logger.exception("support suggest-reply failed")
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     return SupportSuggestReplyResponse(
-        tenant_id=payload.tenant_id,
+        tenant_id=case_tenant_id,
         case_id=payload.case_id,
         draft=draft,
         used_sources=sources,

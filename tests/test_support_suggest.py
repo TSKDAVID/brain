@@ -19,8 +19,16 @@ def test_support_suggest_reply_endpoint(monkeypatch):
         },
     )
     monkeypatch.setattr(
+        "app.main.resolve_support_case_tenant",
+        lambda case_id: "00000000-0000-0000-0000-000000000001",
+    )
+    monkeypatch.setattr(
         "app.main.suggest_support_reply",
-        lambda **kwargs: ("Thanks for reaching out — we are looking into this.", ["kb-1"]),
+        lambda **kwargs: (
+            "Thanks for reaching out — we are looking into this.",
+            ["kb-1"],
+            "00000000-0000-0000-0000-000000000001",
+        ),
     )
     res = client.post(
         "/v1/control/support/suggest-reply",

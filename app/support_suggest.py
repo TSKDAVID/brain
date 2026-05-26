@@ -9,6 +9,21 @@ from app.rag.retriever import retrieve_faq_context
 _orchestrator = build_graph()
 
 
+def resolve_support_case_tenant(case_id: str) -> str:
+    """Tenant id from the case row (authoritative for suggest-reply)."""
+    case = get_single_row(
+        "support_cases",
+        "id,tenant_id",
+        {"id": case_id},
+    )
+    if not case:
+        raise ValueError("case not found")
+    tenant_id = case.get("tenant_id")
+    if not tenant_id:
+        raise ValueError("case has no tenant")
+    return str(tenant_id)
+
+
 def _format_thread(messages: list[dict], *, limit: int = 24) -> str:
     lines: list[str] = []
     for row in messages[-limit:]:
@@ -24,10 +39,11 @@ def _format_thread(messages: list[dict], *, limit: int = 24) -> str:
 
 def suggest_support_reply(
     *,
-    tenant_id: str,
     case_id: str,
     draft_hint: str | None = None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], str]:
+    tenant_id = resolve_support_case_tenant(case_id)
+
     case = get_single_row(
         "support_cases",
         "id,tenant_id,subject,description,status,category",
@@ -35,8 +51,6 @@ def suggest_support_reply(
     )
     if not case:
         raise ValueError("case not found")
-    if str(case.get("tenant_id")) != str(tenant_id):
-        raise ValueError("case tenant mismatch")
 
     messages = get_rows(
         "support_case_messages",
@@ -84,4 +98,4 @@ def suggest_support_reply(
             "Thank you for your patience. We are reviewing your case and will follow up "
             "with the next steps shortly."
         )
-    return draft, list(sources or [])
+    return draft, list(sources or []), tenant_id
