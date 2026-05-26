@@ -11,16 +11,43 @@ from app.security.sanitizer import sanitize_message, sanitize_metadata
 replay_guard = ReplayGuard()
 
 
+def _normalize_tenant_id(value: str) -> str:
+    return str(value).strip().lower()
+
+
+def _jwt_embedded_tenant_id(claims: dict) -> str | None:
+    """Optional tenant id embedded in the Supabase access token."""
+    direct = claims.get("tenant_id")
+    if direct:
+        return str(direct)
+    app_meta = claims.get("app_metadata")
+    if isinstance(app_meta, dict) and app_meta.get("tenant_id"):
+        return str(app_meta["tenant_id"])
+    return None
+
+
+def _is_chaster_platform_staff(user_id: str) -> bool:
+    if not user_id:
+        return False
+    row = get_single_row("chaster_team", "id", {"user_id": user_id})
+    return row is not None
+
+
 def _tenant_matches_jwt(claims: dict, request_tenant_id: str) -> bool:
     """
-    Supabase access tokens usually do not include tenant_id.
-    If present, it must match. Otherwise resolve via tenant_members (user sub).
+    Supabase access tokens may include a home tenant_id claim.
+    HQ staff (chaster_team) may use control APIs for any tenant's cases.
     """
-    jwt_tenant = claims.get("tenant_id")
-    if jwt_tenant:
-        return jwt_tenant == request_tenant_id
-
     sub = claims.get("sub")
+    request_tid = _normalize_tenant_id(request_tenant_id)
+
+    if sub and _is_chaster_platform_staff(sub):
+        return True
+
+    jwt_tenant = _jwt_embedded_tenant_id(claims)
+    if jwt_tenant and _normalize_tenant_id(jwt_tenant) == request_tid:
+        return True
+
     if not sub:
         return False
 
