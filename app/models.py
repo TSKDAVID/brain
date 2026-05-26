@@ -149,3 +149,25 @@ class SandboxMessageResponse(BaseModel):
     confidence: float
     response: str
     used_sources: list[str] = Field(default_factory=list)
+
+
+class SandboxResetRequest(BaseModel):
+    tenant_id: str
+    conversation_id: str | None = None
+
+
+class SandboxResetResponse(BaseModel):
+    ok: bool = True
+
+
+class SupportSuggestReplyRequest(BaseModel):
+    tenant_id: str
+    case_id: str
+    draft_hint: str | None = Field(default=None, max_length=2000)
+
+
+class SupportSuggestReplyResponse(BaseModel):
+    tenant_id: str
+    case_id: str
+    draft: str
+    used_sources: list[str] = Field(default_factory=list)
